@@ -4,71 +4,49 @@ import numpy as np
 import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
 import joblib
+import tensorflow as tf
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-import tensorflow as tf
 
-# --- Page Config ---
 st.set_page_config(page_title="AI Stock Predictor Pro", layout="wide")
 st.title('📈 AI Stock Market Prediction Pro')
-st.markdown("Developed by **Harimurugan** | Real-time Stock Analysis")
 
-# --- Sidebar ---
 ticker = st.sidebar.text_input('Enter Stock Ticker', 'AAPL').upper()
 
-# --- Data Fetching (Fixed Version) ---
+# Data Fetching
+end_date = datetime.now().strftime('%Y-%m-%d')
+start_date = (datetime.now() - timedelta(days=3650)).strftime('%Y-%m-%d')
+
 @st.cache_data
 def load_data(symbol):
-    try:
-        # Fetching data
-        df = yf.download(symbol, start='2015-01-01', end=datetime.now().strftime('%Y-%m-%d'))
-        
-        if df.empty:
-            return None
-        
-        # MUKKIYAMAANA STEP: Fix for Multi-index columns in new yfinance version
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df.reset_index(inplace=True)
-        return df
-    except Exception as e:
-        return None
+    data = yf.download(symbol, start=start_date, end=end_date)
+    if data.empty: return None
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+    data.reset_index(inplace=True)
+    return data
 
 data = load_data(ticker)
 
-if data is None:
-    st.error(f"Could not find data for ticker: {ticker}. Please check the symbol.")
-else:
-    # --- Visualizations ---
-    st.subheader(f'Price History of {ticker}')
-    fig1 = plt.figure(figsize=(12, 6))
-    plt.plot(data['Date'], data['Close'], 'b')
-    plt.xlabel('Date')
-    plt.ylabel('Price')
-    st.pyplot(fig1)
+if data is not None:
+    st.subheader(f'Price Chart for {ticker}')
+    st.line_chart(data.set_index('Date')['Close'])
 
-    # --- Prediction ---
+    # PREDICTION LOGIC
     try:
-        # Load model and scaler safely
-        # Keras 3 might need native loading
-        model = tf.keras.models.load_model('stock_model.sav')
+        # Load .h5 model using Keras
+        model = tf.keras.models.load_model('stock_model.h5')
         scaler = joblib.load('scaler.sav')
+
+        recent_data = data['Close'].tail(60).values.reshape(-1,1)
+        scaled_data = scaler.transform(recent_data)
         
-        last_60_days = data['Close'].tail(60).values.reshape(-1, 1)
-        scaled_data = scaler.transform(last_60_days)
-        
-        X_test = []
-        X_test.append(scaled_data)
-        X_test = np.array(X_test)
+        X_test = np.array([scaled_data])
         X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
-        
-        prediction = model.predict(X_test)
-        final_price = scaler.inverse_transform(prediction)
-        
-        st.divider()
-        st.subheader("🚀 AI Prediction")
-        st.metric(label=f"Next Predicted Close for {ticker}", value=f"${final_price[0][0]:.2f}")
-        
+
+        pred = model.predict(X_test)
+        pred_final = scaler.inverse_transform(pred)
+
+        st.success(f"Predicted Next Close Price: ${pred_final[0][0]:.2f}")
     except Exception as e:
-        st.warning("Prediction is currently unavailable due to model loading. Checking charts...")
+        st.warning(f"Model Loading Error: {e}")
