@@ -33,12 +33,20 @@ start_date = (datetime.now() - timedelta(days=3650)).strftime('%Y-%m-%d') # 10 y
 @st.cache_data
 def load_data(symbol):
     try:
-        data = yf.download(symbol, start=start_date, end=end_date)
+        # We use a 1d interval for cleaner data
+        data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+        
         if data.empty:
             return None
+            
+        # Fix for yfinance multi-index columns issue
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+            
         data.reset_index(inplace=True)
         return data
-    except Exception:
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
         return None
 
 data = load_data(ticker)
