@@ -39,28 +39,33 @@ if data is not None:
     st.subheader(f'Stock Price Analysis: {ticker}')
     st.line_chart(data.set_index('Date')['Close'])
 
-    # --- AI PREDICTION SECTION ---
+   # --- AI PREDICTION SECTION ---
     st.divider()
     try:
-        # IMPORTANT: Loading the .h5 model correctly
-        model = tf.keras.models.load_model('stock_model.h5', compile=False)
-        scaler = joblib.load('scaler.sav')
-
-        # Prepare Data (Last 60 days)
-        last_60_days = data['Close'].tail(60).values.reshape(-1, 1)
-        scaled_data = scaler.transform(last_60_days)
+        import os
+        model_path = 'stock_model.h5'
         
-        X_test = np.array([scaled_data])
-        X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+        if os.path.exists(model_path):
+            # Load model with Keras 3 compatibility
+            model = tf.keras.models.load_model(model_path, compile=False)
+            scaler = joblib.load('scaler.sav')
 
-        # AI Prediction
-        pred = model.predict(X_test)
-        final_pred = scaler.inverse_transform(pred)
+            # Prepare Data (Last 60 days)
+            last_60_days = data['Close'].tail(60).values.reshape(-1, 1)
+            scaled_data = scaler.transform(last_60_days)
+            
+            X_test = np.array([scaled_data])
+            X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
 
-        # Success Display
-        st.balloons()
-        st.success(f"### 🤖 AI Prediction for Next Day Close: **${final_pred[0][0]:.2f}**")
-        
+            # AI Prediction
+            pred = model.predict(X_test)
+            final_pred = scaler.inverse_transform(pred)
+
+            # Success Display
+            st.balloons()
+            st.success(f"### 🤖 AI Prediction for Next Day Close: **${final_pred[0][0]:.2f}**")
+        else:
+            st.error("Model file 'stock_model.h5' not found in GitHub!")
+            
     except Exception as e:
-        st.error(f"Prediction Error: {e}")
-        st.info("Wait... I am double checking the model files.")
+        st.error(f"Technical Error: {e}")
