@@ -43,7 +43,7 @@ if data is not None:
     st.divider()
     try:
         import os
-        model_path = 'stock_model.h5'
+        model_path = 'stock_model.keras'
         
         if os.path.exists(model_path):
             # Load model with Keras 3 compatibility
@@ -65,7 +65,7 @@ if data is not None:
             st.balloons()
             st.success(f"### 🤖 AI Prediction for Next Day Close: **${final_pred[0][0]:.2f}**")
         else:
-            st.error("Model file 'stock_model.h5' not found in GitHub!")
+            st.error("Model file 'stock_model.keras' not found in GitHub!")
             
     except Exception as e:
         st.error(f"Technical Error: {e}")
