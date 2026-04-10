@@ -7,105 +7,106 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import joblib
-from datetime import datetime, timedelta
+from datetime import datetime
+import time
 
 # --- 0. App Configuration ---
-st.set_page_config(page_title="Dynamic Stock Predictor AI", layout="wide")
+st.set_page_config(page_title="AI Stock Pro Dashboard", layout="wide")
 
-# --- 1. Sidebar for Live Inputs ---
-st.sidebar.header("AI Model Settings")
-popular_symbols = ["NVDA", "AAPL", "TSLA", "MSFT", "RELIANCE.NS", "TCS.NS", "BTC-USD"]
-choice = st.sidebar.selectbox("Choose a stock or type below", ["Type my own..."] + popular_symbols)
+# --- 1. Sidebar - Live Settings ---
+st.sidebar.header("📡 Live Control Panel")
 
-if choice == "Type my own...":
-    symbol = st.sidebar.text_input("Enter Ticker Symbol", "MSFT").upper()
-else:
-    symbol = choice
+# Live Tracking Toggle
+live_switch = st.sidebar.toggle("Enable Live Tracking", value=True)
 
-# --- 2. Main Dashboard ---
-st.title("📈 Live Stock Tracker & AI Predictor")
-st.markdown(f"Currently Analyzing and Training for: **{symbol}**")
+# Live Clock in Sidebar
+st.sidebar.divider()
+clock_placeholder = st.sidebar.empty()
 
-# Using columns for the top metrics
+# More Famous Stocks
+famous_stocks = {
+    "NVIDIA": "NVDA", "Apple": "AAPL", "Tesla": "TSLA", "Microsoft": "MSFT", 
+    "Google": "GOOGL", "Amazon": "AMZN", "Meta": "META", "Netflix": "NFLX",
+    "Reliance": "RELIANCE.NS", "TCS": "TCS.NS", "Infosys": "INFY.NS",
+    "HDFC Bank": "HDFCBANK.NS", "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"
+}
+selected_stock_name = st.sidebar.selectbox("Select Stock", list(famous_stocks.keys()))
+symbol = famous_stocks[selected_stock_name]
+
+# Custom Ticker Option
+custom_ticker = st.sidebar.text_input("Or Type Custom Ticker (e.g., TSLA)", "")
+if custom_ticker:
+    symbol = custom_ticker.upper()
+
+# --- 2. Live Clock Logic ---
+def update_clock():
+    current_time = datetime.now().strftime("%H:%M:%S")
+    clock_placeholder.markdown(f"### 🕒 Live Time: {current_time}")
+
+update_clock()
+
+# --- 3. Main Dashboard ---
+st.title(f"📈 {selected_stock_name} AI Analytics")
 m1, m2, m3 = st.columns(3)
 
-if st.sidebar.button("Train AI & Predict"):
-    with st.spinner(f'Fetching data and training AI model for {symbol}...'):
-        # Step 1: Fetch 2 years of data for training
+# Function to fetch and train
+def run_analysis():
+    with st.spinner('Updating market data...'):
         df = yf.download(symbol, period="2y", interval="1d")
-
-        if not df.empty and len(df) > 100:
-            # FIX: Handling Multi-index columns in newer yfinance versions
+        
+        if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # --- 3. Feature Engineering ---
+            # Feature Engineering
             df['MA20'] = df['Close'].rolling(window=20).mean()
             df['MA50'] = df['Close'].rolling(window=50).mean()
-            df['Target'] = df['Close'].shift(-1) # Predicting next day
+            df['Target'] = df['Close'].shift(-1)
             df.dropna(inplace=True)
 
-            # Splitting Features and Target
             X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
             y = df['Target']
 
-            # --- 4. Live Training Logic ---
-            model_pipeline = Pipeline([
+            # Model Training
+            model = Pipeline([
                 ('scaler', StandardScaler()),
                 ('regressor', RandomForestRegressor(n_estimators=100, random_state=42))
             ])
-            
-            # Training the model on the spot
-            model_pipeline.fit(X, y)
-            
-            # Saving the live-trained model
-            joblib.dump(model_pipeline, 'live_stock_model.sav', compress=3)
+            model.fit(X, y)
 
-            # --- 5. Metrics & Visualization ---
-            latest_data = df.tail(1)
-            current_price = float(latest_data['Close'].iloc[0])
+            # Latest Metrics
+            current_price = float(df['Close'].iloc[-1])
             prev_price = float(df['Close'].iloc[-2])
-            price_diff = current_price - prev_price
             
-            # Updating Metrics
-            m1.metric("Current Price", f"${current_price:.2f}", f"{price_diff:.2f}")
-            m2.metric("Market Status", "LIVE")
+            m1.metric("Current Price", f"${current_price:.2f}", f"{current_price-prev_price:.2f}")
+            m2.metric("Market Status", "🟢 OPEN" if live_switch else "🔴 PAUSED")
             m3.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
 
-            # Plotly Candlestick Chart
+            # Interactive Graph
             fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=df.index,
-                open=df['Open'], high=df['High'],
-                low=df['Low'], close=df['Close'], 
-                name='Market Data'
-            ))
-            # Adding Moving Averages
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange', width=1)))
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='blue', width=1)))
-
-            fig.update_layout(template='plotly_dark', height=500, title=f"{symbol} Price Trend", xaxis_rangeslider_visible=False)
+            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'))
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange')))
+            fig.update_layout(template='plotly_dark', height=500, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- 6. Final Prediction ---
-            # Using the very last available row for tomorrow's prediction
-            prediction_input = latest_data[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
-            prediction = model_pipeline.predict(prediction_input)
-            pred_val = float(prediction[0])
-
-            st.divider()
-            st.subheader(f"🎯 AI Prediction for {symbol}")
+            # Prediction
+            latest_input = df.tail(1)[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
+            prediction = model.predict(latest_input)[0]
             
-            p_col1, p_col2 = st.columns(2)
-            p_col1.write(f"### Next Trading Day Close: **${pred_val:.2f}**")
-            
-            diff = pred_val - current_price
-            if diff > 0:
-                p_col2.success(f"🔼 Bullish Trend: Expected increase of ${diff:.2f}")
+            st.subheader(f"🎯 AI Tomorrow's Prediction: ${prediction:.2f}")
+            if prediction > current_price:
+                st.success(f"🔼 Bullish: Potential growth of ${prediction - current_price:.2f}")
             else:
-                p_col2.warning(f"🔽 Bearish Trend: Expected decrease of ${abs(diff):.2f}")
-
+                st.warning(f"🔽 Bearish: Potential drop of ${current_price - prediction:.2f}")
         else:
-            st.error("Error: Not enough historical data found for this symbol.")
+            st.error("Ticker not found!")
 
-st.caption("Note: This model is trained live on historical data. Market investments carry risks.")
+# Run logic based on Toggle
+if live_switch:
+    run_analysis()
+    time.sleep(1) # Small delay
+    st.rerun() # This will keep the clock and data moving
+else:
+    if st.sidebar.button("Manual Update"):
+        run_analysis()
+    st.info("Live Tracking is Paused. Use the toggle to resume.")
