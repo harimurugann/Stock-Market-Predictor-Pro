@@ -27,10 +27,26 @@ st.markdown(f"Currently Analyzing and Training for: **{symbol}**")
 
 if st.sidebar.button("Train AI & Predict"):
     with st.spinner(f'Fetching data and training AI model for {symbol}...'):
-        # Step 1: Fetch 2 years of data for training
-        df = yf.download(symbol, period="2y", interval="1d")
         
-    if not df.empty and len(df) > 100:
+        # Step 1: Fetch data
+        df = yf.download(symbol, period="2y", interval="1d")
+
+        fig.add_trace(go.Candlestick(
+    x=df.index, 
+    open=df['Open'], 
+    high=df['High'], 
+    low=df['Low'], 
+    close=df['Close'], 
+    name='Market Data'
+))
+        # --- FIX STARTS HERE ---
+        # If the data comes in Multi-index format (common in newer yfinance versions)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        
+        # Ensure the column names are standard
+        df.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        # --- FIX ENDS HERE ---
         # --- 3. Feature Engineering ---
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA50'] = df['Close'].rolling(window=50).mean()
@@ -54,11 +70,23 @@ if st.sidebar.button("Train AI & Predict"):
         # Saving the live-trained model
         joblib.dump(model_pipeline, 'live_stock_model.sav', compress=3)
 
-        # --- 5. Metrics & Visualization ---
-        latest_data = df.tail(1)
-        current_price = float(latest_data['Close'].iloc[0])
+        # Plotly Candlestick Chart
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Price Data'
+        ))
         
-        col1, col2 = st.columns(2)
+        # Adding Moving Averages to the graph (Optional but looks pro)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange', width=1)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='blue', width=1)))
+
+        fig.update_layout(template='plotly_dark', height=500, title=f"{symbol} 2-Year Trend", xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
         col1.metric("Live Market Price", f"${current_price:.2f}")
 
         # Plotly Candlestick Chart
