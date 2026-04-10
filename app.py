@@ -1,113 +1,91 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import joblib
-from datetime import datetime, timedelta
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # --- 0. App Configuration ---
-st.set_page_config(page_title="Dynamic Stock Predictor AI", layout="wide")
+st.set_page_config(page_title="Live Stock Tracker & Predictor", layout="wide")
 
-# --- 1. Sidebar for Live Inputs ---
-st.sidebar.header("AI Model Settings")
-popular_symbols = ["NVDA", "AAPL", "TSLA", "RELIANCE.NS", "TCS.NS", "BTC-USD", "ETH-USD"]
-choice = st.sidebar.selectbox("Choose a stock or type below", ["Type my own..."] + popular_symbols)
+# --- 1. Live Tracking Feature (Auto-refresh every 60 seconds) ---
+st.sidebar.header("Live Tracking Settings")
+auto_refresh = st.sidebar.checkbox("Enable Live Tracking", value=False)
 
-if choice == "Type my own...":
-    symbol = st.sidebar.text_input("Enter Ticker Symbol", "MSFT").upper()
-else:
-    symbol = choice
+if auto_refresh:
+    # Refresh every 60,000 milliseconds (1 minute)
+    st_autorefresh(interval=60000, key="stock_refresh")
+    st.sidebar.success("Live Tracking Active (Updating every 1 min)")
 
-# --- 2. Main Dashboard ---
-st.title("📈 Real-time Trained Stock Predictor")
-st.markdown(f"Currently Analyzing and Training for: **{symbol}**")
+# --- 2. Sidebar Inputs ---
+popular_symbols = ["NVDA", "AAPL", "TSLA", "RELIANCE.NS", "TCS.NS", "BTC-USD"]
+choice = st.sidebar.selectbox("Select Asset", ["Type my own..."] + popular_symbols)
+symbol = st.sidebar.text_input("Ticker", "MSFT").upper() if choice == "Type my own..." else choice
 
-if st.sidebar.button("Train AI & Predict"):
-    with st.spinner(f'Fetching data and training AI model for {symbol}...'):
-        # Step 1: Fetch 2 years of data for training
-        df = yf.download(symbol, period="2y", interval="1d")
+# --- 3. Main Dashboard ---
+st.title("📈 Live Stock Tracker & AI Predictor")
 
-        # Fix for Multi-index columns in newer yfinance versions
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+# Fetching Data
+with st.spinner('Fetching live market data...'):
+    df = yf.download(symbol, period="2y", interval="1d")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-    if not df.empty and len(df) > 100:
-        # --- 3. Feature Engineering ---
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['Target'] = df['Close'].shift(-1) # Predicting next day's price
-        df.dropna(inplace=True)
+if not df.empty and len(df) > 100:
+    # Feature Engineering
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['MA50'] = df['Close'].rolling(window=50).mean()
+    df['Target'] = df['Close'].shift(-1)
+    df_clean = df.dropna()
 
-        # Splitting Features and Target
-        X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
-        y = df['Target']
+    # Model Training Logic
+    X = df_clean[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
+    y = df_clean['Target']
+    
+    model_pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('regressor', RandomForestRegressor(n_estimators=100, random_state=42))
+    ])
+    model_pipeline.fit(X, y)
 
-        # --- 4. Live Training Logic ---
-        model_pipeline = Pipeline([
-            ('scaler', StandardScaler()),
-            ('regressor', RandomForestRegressor(n_estimators=100, random_state=42))
-        ])
+    # --- Metrics Dashboard ---
+    latest_data = df.tail(1)
+    current_price = float(latest_data['Close'].iloc[0])
+    prev_close = float(df['Close'].iloc[-2])
+    price_change = current_price - prev_close
+    percent_change = (price_change / prev_close) * 100
 
-        # Training the model on the spot
-        model_pipeline.fit(X, y)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Current Price", f"${current_price:.2f}", f"{price_change:.2f} ({percent_change:.2f}%)")
+    m2.metric("Market Status", "LIVE" if auto_refresh else "STATIC")
+    m3.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
 
-        # Saving the live-trained model
-        joblib.dump(model_pipeline, 'live_stock_model.sav', compress=3)
+    # --- Candlestick Chart ---
+    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
+                                         low=df['Low'], close=df['Close'], name='Market')])
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange')))
+    fig.update_layout(template='plotly_dark', height=500, xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
 
-        # --- 5. Metrics & Visualization ---
-        latest_data = df.tail(1)
-        # Getting the last close price safely
-        current_price = float(latest_data['Close'].iloc[0])
+    # --- Prediction Result ---
+    prediction_input = latest_data[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
+    pred_val = model_pipeline.predict(prediction_input)[0]
 
-        col1, col2 = st.columns(2)
-        col1.metric("Live Market Price", f"${current_price:.2f}")
-
-        # Plotly Candlestick Chart
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(
-            x=df.index,
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
-            name='Price'
-        ))
-        
-        # Adding MA lines to graph
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange', width=1.5)))
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='blue', width=1.5)))
-
-        fig.update_layout(
-            template='plotly_dark', 
-            height=500, 
-            title=f"{symbol} Price Trend & Moving Averages",
-            xaxis_rangeslider_visible=False
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # --- 6. Final Prediction ---
-        # Using the last available row to predict tomorrow
-        prediction_input = latest_data[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
-        prediction = model_pipeline.predict(prediction_input)
-        pred_val = float(prediction[0])
-
-        st.divider()
-        st.subheader(f"🎯 AI Prediction for {symbol}")
-        
-        p_col1, p_col2 = st.columns(2)
-        p_col1.write(f"### Next Trading Day's Predicted Close: **${pred_val:.2f}**")
-
-        diff = pred_val - current_price
-        if diff > 0:
-            p_col2.success(f"📈 Bullish Trend: Expected increase of ${diff:.2f}")
-        else:
-            p_col2.warning(f"📉 Bearish Trend: Expected decrease of ${abs(diff):.2f}")
-
+    st.subheader(f"🎯 AI Forecast for Tomorrow")
+    p1, p2 = st.columns(2)
+    p1.info(f"Predicted Closing Price: **${pred_val:.2f}**")
+    
+    diff = pred_val - current_price
+    if diff > 0:
+        p2.success(f"Signal: **BULLISH** (Expected +${diff:.2f})")
     else:
-        st.error("Error: Not enough historical data found for this symbol. Please try a different one.")
+        p2.warning(f"Signal: **BEARISH** (Expected -${abs(diff):.2f})")
 
-st.caption("Note: This model is trained live on historical data. Market investments carry risks.")
+else:
+    st.error("Data not available for the selected symbol.")
+
+st.caption("Auto-refresh is active. The AI retrains every minute with the latest market tick.")
