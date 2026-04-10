@@ -9,6 +9,16 @@ import joblib
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
+from streamlit_autorefresh import st_autorefresh
+import datetime
+
+# Refresh the app every 60 seconds to update live data
+count = st_autorefresh(interval=60000, key="fizzbuzzcounter")
+
+# Display Live Time in Sidebar or Header
+now = datetime.datetime.now().strftime("%H:%M:%S")
+st.sidebar.markdown(f"### 🕒 Server Time: {now}")
+
 # --- 0. App Configuration ---
 st.set_page_config(page_title="Live Stock Tracker & Predictor", layout="wide")
 
