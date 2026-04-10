@@ -7,6 +7,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import joblib
+from datetime import datetime, timedelta
 
 # --- 0. App Configuration ---
 st.set_page_config(page_title="Dynamic Stock Predictor AI", layout="wide")
@@ -22,35 +23,23 @@ else:
     symbol = choice
 
 # --- 2. Main Dashboard ---
-st.title("🚀 Real-time Trained Stock Predictor")
+st.title("📈 Real-time Trained Stock Predictor")
 st.markdown(f"Currently Analyzing and Training for: **{symbol}**")
 
 if st.sidebar.button("Train AI & Predict"):
     with st.spinner(f'Fetching data and training AI model for {symbol}...'):
-        
-        # Step 1: Fetch data
+        # Step 1: Fetch 2 years of data for training
         df = yf.download(symbol, period="2y", interval="1d")
 
-        fig.add_trace(go.Candlestick(
-    x=df.index, 
-    open=df['Open'], 
-    high=df['High'], 
-    low=df['Low'], 
-    close=df['Close'], 
-    name='Market Data'
-))
-        # --- FIX STARTS HERE ---
-        # If the data comes in Multi-index format (common in newer yfinance versions)
+        # Fix for Multi-index columns in newer yfinance versions
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        
-        # Ensure the column names are standard
-        df.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-        # --- FIX ENDS HERE ---
+
+    if not df.empty and len(df) > 100:
         # --- 3. Feature Engineering ---
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['Target'] = df['Close'].shift(-1) # Predicting next day
+        df['Target'] = df['Close'].shift(-1) # Predicting next day's price
         df.dropna(inplace=True)
 
         # Splitting Features and Target
@@ -58,17 +47,24 @@ if st.sidebar.button("Train AI & Predict"):
         y = df['Target']
 
         # --- 4. Live Training Logic ---
-        # Building the automated pipeline
         model_pipeline = Pipeline([
             ('scaler', StandardScaler()),
             ('regressor', RandomForestRegressor(n_estimators=100, random_state=42))
         ])
-        
+
         # Training the model on the spot
         model_pipeline.fit(X, y)
-        
+
         # Saving the live-trained model
         joblib.dump(model_pipeline, 'live_stock_model.sav', compress=3)
+
+        # --- 5. Metrics & Visualization ---
+        latest_data = df.tail(1)
+        # Getting the last close price safely
+        current_price = float(latest_data['Close'].iloc[0])
+
+        col1, col2 = st.columns(2)
+        col1.metric("Live Market Price", f"${current_price:.2f}")
 
         # Plotly Candlestick Chart
         fig = go.Figure()
@@ -78,26 +74,23 @@ if st.sidebar.button("Train AI & Predict"):
             high=df['High'],
             low=df['Low'],
             close=df['Close'],
-            name='Price Data'
+            name='Price'
         ))
         
-        # Adding Moving Averages to the graph (Optional but looks pro)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange', width=1)))
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='blue', width=1)))
+        # Adding MA lines to graph
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='orange', width=1.5)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='blue', width=1.5)))
 
-        fig.update_layout(template='plotly_dark', height=500, title=f"{symbol} 2-Year Trend", xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig, use_container_width=True)
-        col1.metric("Live Market Price", f"${current_price:.2f}")
-
-        # Plotly Candlestick Chart
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
-                                     low=df['Low'], close=df['Close'], name='Price'))
-        fig.update_layout(template='plotly_dark', height=400, title=f"{symbol} 2-Year Trend")
+        fig.update_layout(
+            template='plotly_dark', 
+            height=500, 
+            title=f"{symbol} Price Trend & Moving Averages",
+            xaxis_rangeslider_visible=False
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         # --- 6. Final Prediction ---
-        # Predicting tomorrow using the last available row of data
+        # Using the last available row to predict tomorrow
         prediction_input = latest_data[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
         prediction = model_pipeline.predict(prediction_input)
         pred_val = float(prediction[0])
@@ -107,7 +100,7 @@ if st.sidebar.button("Train AI & Predict"):
         
         p_col1, p_col2 = st.columns(2)
         p_col1.write(f"### Next Trading Day's Predicted Close: **${pred_val:.2f}**")
-        
+
         diff = pred_val - current_price
         if diff > 0:
             p_col2.success(f"📈 Bullish Trend: Expected increase of ${diff:.2f}")
@@ -115,6 +108,6 @@ if st.sidebar.button("Train AI & Predict"):
             p_col2.warning(f"📉 Bearish Trend: Expected decrease of ${abs(diff):.2f}")
 
     else:
-        st.error("Error: Not enough historical data to train the model. Try a different symbol.")
+        st.error("Error: Not enough historical data found for this symbol. Please try a different one.")
 
 st.caption("Note: This model is trained live on historical data. Market investments carry risks.")
