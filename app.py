@@ -1,105 +1,92 @@
 import streamlit as st
-import joblib
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+import joblib
 
 # --- 0. App Configuration ---
-st.set_page_config(page_title="Stock Predictor Pro", layout="wide")
+st.set_page_config(page_title="Dynamic Stock Predictor AI", layout="wide")
 
-# --- 1. Load the Saved Pipeline ---
-@st.cache_resource
-def load_model():
-    # Loading the compressed pipeline saved as .sav
-    return joblib.load('full_stock_pipeline.sav')
+# --- 1. Sidebar for Live Inputs ---
+st.sidebar.header("AI Model Settings")
+popular_symbols = ["NVDA", "AAPL", "TSLA", "RELIANCE.NS", "TCS.NS", "BTC-USD", "ETH-USD"]
+choice = st.sidebar.selectbox("Choose a stock or type below", ["Type my own..."] + popular_symbols)
 
-try:
-    model = load_model()
-except Exception as e:
-    st.error(f"Error loading model: {e}")
-    st.stop()
+if choice == "Type my own...":
+    symbol = st.sidebar.text_input("Enter Ticker Symbol", "MSFT").upper()
+else:
+    symbol = choice
 
-# --- 2. Sidebar Configuration ---
-st.sidebar.header("Stock Selection")
-symbol = st.sidebar.text_input("Enter Ticker Symbol", "NVDA").upper()
-time_period = st.sidebar.selectbox("Select History Period", ["3mo", "6mo", "1y", "2y"])
+# --- 2. Main Dashboard ---
+st.title("🚀 Real-time Trained Stock Predictor")
+st.markdown(f"Currently Analyzing and Training for: **{symbol}**")
 
-# --- 3. Main Dashboard ---
-st.title("📈 Live Stock Market Prediction Dashboard")
-st.markdown(f"Currently analyzing: **{symbol}**")
-
-if st.sidebar.button("Get Live Analysis"):
-    with st.spinner('Fetching live data from Yahoo Finance...'):
-        # Fetch data
-        data = yf.download(symbol, period=time_period, interval="1d")
-    
-    if not data.empty:
-        # --- 4. Feature Engineering (Live) ---
-        data['MA20'] = data['Close'].rolling(window=20).mean()
-        data['MA50'] = data['Close'].rolling(window=50).mean()
+if st.sidebar.button("Train AI & Predict"):
+    with st.spinner(f'Fetching data and training AI model for {symbol}...'):
+        # Step 1: Fetch 2 years of data for training
+        df = yf.download(symbol, period="2y", interval="1d")
         
-        # Fixing potential Multi-Index or Series issues for Metrics
-        latest_price = float(data['Close'].iloc[-1])
-        prev_price = float(data['Close'].iloc[-2])
-        price_diff = latest_price - prev_price
+    if not df.empty and len(df) > 100:
+        # --- 3. Feature Engineering ---
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA50'] = df['Close'].rolling(window=50).mean()
+        df['Target'] = df['Close'].shift(-1) # Predicting next day
+        df.dropna(inplace=True)
 
-        # --- 5. Metrics Display ---
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Current Price", f"${latest_price:.2f}", f"{price_diff:.2f}")
-        col2.metric("20-Day MA", f"${float(data['MA20'].iloc[-1]):.2f}")
-        col3.metric("50-Day MA", f"${float(data['MA50'].iloc[-1]):.2f}")
+        # Splitting Features and Target
+        X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
+        y = df['Target']
 
-        # --- 6. Interactive Visualization (Plotly) ---
-        st.subheader("Interactive Market Chart")
+        # --- 4. Live Training Logic ---
+        # Building the automated pipeline
+        model_pipeline = Pipeline([
+            ('scaler', StandardScaler()),
+            ('regressor', RandomForestRegressor(n_estimators=100, random_state=42))
+        ])
+        
+        # Training the model on the spot
+        model_pipeline.fit(X, y)
+        
+        # Saving the live-trained model
+        joblib.dump(model_pipeline, 'live_stock_model.sav', compress=3)
+
+        # --- 5. Metrics & Visualization ---
+        latest_data = df.tail(1)
+        current_price = float(latest_data['Close'].iloc[0])
+        
+        col1, col2 = st.columns(2)
+        col1.metric("Live Market Price", f"${current_price:.2f}")
+
+        # Plotly Candlestick Chart
         fig = go.Figure()
-        
-        # Candlestick chart
-        fig.add_trace(go.Candlestick(
-            x=data.index,
-            open=data['Open'],
-            high=data['High'],
-            low=data['Low'],
-            close=data['Close'],
-            name='Price'
-        ))
-        
-        # Adding Moving Averages
-        fig.add_trace(go.Scatter(x=data.index, y=data['MA20'], line=dict(color='orange', width=1.5), name='MA 20'))
-        fig.add_trace(go.Scatter(x=data.index, y=data['MA50'], line=dict(color='cyan', width=1.5), name='MA 50'))
-
-        fig.update_layout(
-            template='plotly_dark',
-            xaxis_rangeslider_visible=False,
-            height=500,
-            margin=dict(l=20, r=20, t=20, b=20)
-        )
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
+                                     low=df['Low'], close=df['Close'], name='Price'))
+        fig.update_layout(template='plotly_dark', height=400, title=f"{symbol} 2-Year Trend")
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 7. Prediction Logic ---
-        # Preparing the input for the model
-        latest_row = data.tail(1)[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
-        
-        if not latest_row.isnull().values.any():
-            prediction = model.predict(latest_row)
-            pred_val = float(prediction[0])
-            
-            st.divider()
-            st.subheader("🎯 Model Prediction")
-            
-            p_col1, p_col2 = st.columns(2)
-            p_col1.write(f"### Next Trading Day's Predicted Close: **${pred_val:.2f}**")
-            
-            # Simple Buy/Sell logic
-            if pred_val > latest_price:
-                p_col2.success("💡 Signal: BULLISH (Predicted price is higher)")
-            else:
-                p_col2.warning("💡 Signal: BEARISH (Predicted price is lower)")
-        else:
-            st.warning("Not enough data to calculate all features for prediction.")
-            
-    else:
-        st.error("Invalid ticker or data unavailable. Please check the symbol.")
+        # --- 6. Final Prediction ---
+        # Predicting tomorrow using the last available row of data
+        prediction_input = latest_data[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50']]
+        prediction = model_pipeline.predict(prediction_input)
+        pred_val = float(prediction[0])
 
-# --- 8. Footer ---
-st.caption("Data source: Yahoo Finance | Built with Streamlit & Scikit-Learn")
+        st.divider()
+        st.subheader(f"🎯 AI Prediction for {symbol}")
+        
+        p_col1, p_col2 = st.columns(2)
+        p_col1.write(f"### Next Trading Day's Predicted Close: **${pred_val:.2f}**")
+        
+        diff = pred_val - current_price
+        if diff > 0:
+            p_col2.success(f"📈 Bullish Trend: Expected increase of ${diff:.2f}")
+        else:
+            p_col2.warning(f"📉 Bearish Trend: Expected decrease of ${abs(diff):.2f}")
+
+    else:
+        st.error("Error: Not enough historical data to train the model. Try a different symbol.")
+
+st.caption("Note: This model is trained live on historical data. Market investments carry risks.")
