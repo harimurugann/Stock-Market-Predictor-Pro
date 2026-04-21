@@ -2,12 +2,6 @@
 # .gitignore — StockSight AI
 # ============================================================
 
-# ── Saved Models & Artifacts ──
-models/
-*.sav
-*.pkl
-*.pickle
-
 # ── Python Cache ──
 __pycache__/
 *.py[cod]
