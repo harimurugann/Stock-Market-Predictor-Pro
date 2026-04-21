@@ -1,6 +1,5 @@
 # ============================================================
-# app.py — StockSight AI · FINAL STABLE VERSION
-# Fixes: Folder path mismatch (model vs models) & Feature Shape
+# app.py — StockSight AI · CLEAN & FIXED VERSION
 # ============================================================
 
 import warnings
@@ -13,28 +12,34 @@ import yfinance as yf
 import joblib
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 # ─────────────────────────────────────────────
-# PATH RESOLUTION (FIXED FOR YOUR REPO)
+# 1. PAGE CONFIG (Must be the first Streamlit command)
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="StockSight AI",
+    page_icon="📈",
+    layout="wide"
+)
+
+# ─────────────────────────────────────────────
+# 2. PATH RESOLUTION
 # ─────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
+# Checking for 'model' (your actual GitHub folder name)
+MODELS_DIR = BASE_DIR / "model"
 
-# Checking for 'model' (your GitHub folder name)
-MODELS_DIR = BASE_DIR / "model" 
-
-# Fallback in case you rename it to 'models' later
 if not MODELS_DIR.exists():
-    MODELS_DIR = BASE_DIR / "models"
+    MODELS_DIR = BASE_DIR / "models" # Fallback
 
-def get_model_path(filename: str) -> str:
+def get_model_path(filename):
     return str(MODELS_DIR / filename)
 
 # ─────────────────────────────────────────────
-# FEATURE COLUMN ORDER (33 FEATURES)
+# 3. FEATURE COLUMN ORDER (33 Total)
 # ─────────────────────────────────────────────
 FEATURE_COLS = [
     "Open", "High", "Low", "Volume",
@@ -49,18 +54,10 @@ FEATURE_COLS = [
     "Volume_ratio", "DayOfWeek", "Month", "Quarter",
 ]
 
-# Total: 33 ✓
-assert len(FEATURE_COLS) == 33
-
-# ... (Keeping your existing CSS and Page Config from the prompt) ...
-st.set_page_config(page_title="StockSight AI", layout="wide")
-
-# (Paste the CSS block here if you want the neon green theme back)
-
-# ═══════════════════════════════════════════════════════════════
-# CORE: FEATURE ENGINEERING (Ensuring all 33 are calculated)
-# ═══════════════════════════════════════════════════════════════
-def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+# ─────────────────────────────────────────────
+# 4. FEATURE ENGINEERING FUNCTION
+# ─────────────────────────────────────────────
+def engineer_features(df):
     d = df.copy()
     # Moving averages
     for w in [5, 10, 20, 50, 200]:
@@ -85,13 +82,12 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     d["MACD_hist"] = d["MACD"] - d["MACD_signal"]
     # Volatility & Momentum
     ret = d["Close"].pct_change()
-    d["Daily_Return"] = ret
     d["Volatility_5"] = ret.rolling(5).std()
     d["Volatility_20"] = ret.rolling(20).std()
     d["Momentum_5"] = d["Close"] - d["Close"].shift(5)
     d["Momentum_10"] = d["Close"] - d["Close"].shift(10)
     # Lags
-    for lag in [1, 2, 3, 5, 10]:
+    for lag in [1, 2, 3, 5]:
         d[f"Close_lag_{lag}"] = d["Close"].shift(lag)
         d[f"Return_lag_{lag}"] = ret.shift(lag)
     # Volume & Calendar
@@ -103,31 +99,64 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 # ─────────────────────────────────────────────
-# LOAD MODEL ARTIFACTS (FIXED PATH)
+# 5. LOADING ARTIFACTS
 # ─────────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
+@st.cache_resource
 def load_artifacts():
-    out = {"loaded": False}
-    files = {
-        "pipeline": get_model_path("stock_pipeline_compressed.sav"),
-        "scaler":   get_model_path("scaler.sav"),
-        "metadata": get_model_path("pipeline_metadata.sav"),
-    }
+    p_path = get_model_path("stock_pipeline_compressed.sav")
+    s_path = get_model_path("scaler.sav")
+    m_path = get_model_path("pipeline_metadata.sav")
     
-    # Check if files exist
-    for k, v in files.items():
-        if k != "metadata" and not os.path.exists(v):
-            out["error"] = f"File missing: {v}"
-            return out
-
+    if not os.path.exists(p_path) or not os.path.exists(s_path):
+        return None, None, None, f"Missing files in {MODELS_DIR}"
+    
     try:
-        out["pipeline"] = joblib.load(files["pipeline"])
-        out["scaler"]   = joblib.load(files["scaler"])
-        out["metadata"] = joblib.load(files["metadata"]) if os.path.exists(files["metadata"]) else {}
-        out["loaded"]   = True
+        pipeline = joblib.load(p_path)
+        scaler = joblib.load(s_path)
+        meta = joblib.load(m_path) if os.path.exists(m_path) else {}
+        return pipeline, scaler, meta, None
     except Exception as e:
-        out["error"] = f"Load error: {e}"
-    return out
+        return None, None, None, str(e)
 
-# ... (Continue with your Sidebar, Charting, and Prediction logic as provided in your prompt) ...
-# Ensure you use 'get_stock_data(ticker)' and 'engineer_features(df_raw)'
+# ─────────────────────────────────────────────
+# 6. MAIN UI
+# ─────────────────────────────────────────────
+st.title("📈 StockSight AI")
+
+# Load data
+ticker = st.sidebar.text_input("Ticker Symbol", value="AAPL").upper()
+predict_btn = st.sidebar.button("RUN PREDICTION")
+
+pipeline, scaler, meta, err = load_artifacts()
+
+if err:
+    st.error(f"Error: {err}")
+    st.stop()
+
+# Fetch Data
+@st.cache_data(ttl=3600)
+def fetch_data(symbol):
+    data = yf.download(symbol, period="2y", interval="1d", auto_adjust=True)
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+    return data
+
+df_raw = fetch_data(ticker)
+
+if not df_raw.empty:
+    st.metric("Current Price", f"${df_raw['Close'].iloc[-1]:.2f}")
+    
+    # Prediction Logic
+    if predict_btn:
+        df_eng = engineer_features(df_raw)
+        # Get latest row with all 33 features
+        latest_data = df_eng[FEATURE_COLS].dropna().tail(1)
+        
+        if not latest_data.empty:
+            X_scaled = scaler.transform(latest_data)
+            prediction = pipeline.predict(X_scaled)
+            st.success(f"### Predicted Next-Day Close: **${prediction[0]:.2f}**")
+        else:
+            st.warning("Not enough data to calculate all indicators.")
+else:
+    st.error("Could not fetch data.")
